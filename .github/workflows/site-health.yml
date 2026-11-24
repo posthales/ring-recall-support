@@ -2,7 +2,7 @@ name: Ring Recall support site health
 
 on:
   schedule:
-    - cron: '13 0 * * *'
+    - cron: '52 21 * * *'
   workflow_dispatch:
     inputs:
       simulate_missing_page:
