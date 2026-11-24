@@ -1,0 +1,32 @@
+name: Ring Recall support site health
+
+on:
+  schedule:
+    - cron: '13 0 * * *'
+  workflow_dispatch:
+    inputs:
+      simulate_missing_page:
+        description: Check an intentionally missing page to exercise the failure path
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ring-recall-support-health
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify live support and privacy pages
+        if: ${{ inputs.simulate_missing_page != true }}
+        run: bash operations/check-site.sh
+      - name: Verify failure detection
+        if: ${{ inputs.simulate_missing_page == true }}
+        run: bash operations/check-site.sh test-missing-page
