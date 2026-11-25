@@ -5,6 +5,13 @@ site=https://posthales.github.io/ring-recall-support
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 
+check_content() {
+    local body=$1 title=$2 counterpart=$3
+    grep -Fq "$title" "$body" &&
+        grep -Fq 'mailto:support@hibarimadeit.com?subject=Ring%20Recall%20support' "$body" &&
+        grep -Fq "href=\"$counterpart\"" "$body"
+}
+
 check_page() {
     local path=$1 title=$2 counterpart=$3
     local body="$scratch/page.html"
@@ -14,9 +21,7 @@ check_page() {
         printf 'Could not load %s after retrying. Inspect the GitHub Pages deployment.\n' "$path" >&2
         return 1
     fi
-    if ! grep -Fq "$title" "$body" ||
-        ! grep -Fq 'mailto:support@hibarimadeit.com?subject=Ring%20Recall%20support' "$body" ||
-        ! grep -Fq "href=\"$counterpart\"" "$body"; then
+    if ! check_content "$body" "$title" "$counterpart"; then
         printf '%s is missing its expected title, contact, or navigation link.\n' "$path" >&2
         return 1
     fi
@@ -27,6 +32,10 @@ case ${1:-live} in
     live)
         check_page support.html 'Course help' privacy.html
         check_page privacy.html 'Privacy policy' support.html
+        ;;
+    source)
+        check_content docs/support.html 'Course help' privacy.html
+        check_content docs/privacy.html 'Privacy policy' support.html
         ;;
     test-missing-page)
         check_page check-intentionally-missing.html 'Not published' support.html

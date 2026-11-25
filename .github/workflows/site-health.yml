@@ -2,11 +2,15 @@ name: Ring Recall support site health
 
 on:
   schedule:
-    - cron: '52 21 * * *'
+    - cron: '22,52 * * * *'
   workflow_dispatch:
     inputs:
       simulate_missing_page:
         description: Check an intentionally missing page to exercise the failure path
+        type: boolean
+        default: false
+      exercise_recovery:
+        description: Republish the current validated site and check it again
         type: boolean
         default: false
 
@@ -20,13 +24,61 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    outputs:
+      availability: ${{ steps.live.outcome }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
       - name: Verify live support and privacy pages
+        id: live
         if: ${{ inputs.simulate_missing_page != true }}
         run: bash operations/check-site.sh
       - name: Verify failure detection
         if: ${{ inputs.simulate_missing_page == true }}
         run: bash operations/check-site.sh test-missing-page
+
+  recover:
+    needs: check
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && inputs.simulate_missing_page != true &&
+          (needs.check.outputs.availability == 'failure' || inputs.exercise_recovery == true) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      pages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify the source pages before republishing
+        run: bash operations/check-site.sh source
+      - name: Request one Pages rebuild
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          latest_status=$(gh api "repos/$GITHUB_REPO/pages/builds/latest" --jq .status)
+          case "$latest_status" in
+            queued|building) base_path=latest ;;
+            built|errored)
+              build_url=$(gh api --method POST "repos/$GITHUB_REPO/pages/builds" --jq .url)
+              base_path=${build_url##*/}
+              [[ "$base_path" =~ ^[0-9]+$ ]]
+              ;;
+            *) printf 'Unexpected Pages build state.\n' >&2; exit 1 ;;
+          esac
+          for attempt in {1..16}; do
+            case "$(gh api "repos/$GITHUB_REPO/pages/builds/$base_path" --jq .status)" in
+              built) exit 0 ;;
+              errored) printf 'Pages rebuild failed.\n' >&2; exit 1 ;;
+            esac
+            sleep 12
+          done
+          printf 'Pages rebuild timed out.\n' >&2
+          exit 1
+      - name: Verify both public pages after republishing
+        run: bash operations/check-site.sh
