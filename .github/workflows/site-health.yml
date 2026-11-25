@@ -61,21 +61,36 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          latest_status=$(gh api "repos/$GITHUB_REPO/pages/builds/latest" --jq .status)
+          build_path="repos/$GITHUB_REPO/pages/builds/latest"
+          previous_build=$(gh api "$build_path")
+          previous_url=$(jq -er .url <<< "$previous_build")
+          latest_status=$(jq -er .status <<< "$previous_build")
+          expected_commit=$(git rev-parse HEAD)
+          require_new_build=false
           case "$latest_status" in
-            queued|building) base_path=latest ;;
+            queued|building) ;;
             built|errored)
-              build_url=$(gh api --method POST "repos/$GITHUB_REPO/pages/builds" --jq .url)
-              base_path=${build_url##*/}
-              [[ "$base_path" =~ ^[0-9]+$ ]]
+              request_status=$(gh api --method POST "repos/$GITHUB_REPO/pages/builds" --jq .status)
+              [[ "$request_status" == queued ]]
+              require_new_build=true
               ;;
             *) printf 'Unexpected Pages build state.\n' >&2; exit 1 ;;
           esac
           for attempt in {1..16}; do
-            case "$(gh api "repos/$GITHUB_REPO/pages/builds/$base_path" --jq .status)" in
-              built) exit 0 ;;
-              errored) printf 'Pages rebuild failed.\n' >&2; exit 1 ;;
-            esac
+            latest_build=$(gh api "$build_path")
+            latest_url=$(jq -er .url <<< "$latest_build")
+            if [[ "$require_new_build" == false || "$latest_url" != "$previous_url" ]]; then
+              case "$(jq -er .status <<< "$latest_build")" in
+                built)
+                  [[ "$(jq -er .commit <<< "$latest_build")" == "$expected_commit" ]] || {
+                    printf 'The published revision differs from the validated source.\n' >&2
+                    exit 1
+                  }
+                  exit 0
+                  ;;
+                errored) printf 'Pages rebuild failed.\n' >&2; exit 1 ;;
+              esac
+            fi
             sleep 12
           done
           printf 'Pages rebuild timed out.\n' >&2
